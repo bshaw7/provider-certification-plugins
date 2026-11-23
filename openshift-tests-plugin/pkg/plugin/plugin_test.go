@@ -713,6 +713,17 @@ func TestLoadEnv(t *testing.T) {
 			wantProv:   provExternalDVal,
 		},
 		{
+			// The CLI normally includes Disconnected in TEST_PROVIDER; when it
+			// does not, the plugin merges the flag from RUN_MODE. json.Marshal
+			// orders map keys alphabetically.
+			name:       "disconnected mode merges flag into provider config",
+			env:        map[string]string{envProvider: provExternalVal, envRunMode: ExecModeDisconnected},
+			withRunner: true,
+			execMode:   ExecModeDefault,
+			wantExec:   ExecModeDisconnected,
+			wantProv:   `{"Disconnected":true,"type":"external"}`,
+		},
+		{
 			name:       "TEST_PROVIDER without runner does not panic",
 			env:        map[string]string{envProvider: provExternalVal},
 			withRunner: false,
@@ -823,6 +834,49 @@ func TestLoadEnv(t *testing.T) {
 			}
 			if p.OTRunner.ToImage != tc.wantToImage {
 				t.Errorf("OTRunner.ToImage = %q, want %q", p.OTRunner.ToImage, tc.wantToImage)
+			}
+		})
+	}
+}
+
+func TestWithDisconnectedFlag(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   string
+		wantOutput string
+	}{
+		{
+			name:       "external provider gains disconnected flag",
+			provider:   `{"type":"external"}`,
+			wantOutput: `{"Disconnected":true,"type":"external"}`,
+		},
+		{
+			name:       "already disconnected config returned unchanged",
+			provider:   `{"type":"external","Disconnected":true}`,
+			wantOutput: `{"type":"external","Disconnected":true}`,
+		},
+		{
+			name:       "skeleton provider gains disconnected flag",
+			provider:   `{"type":"skeleton"}`,
+			wantOutput: `{"Disconnected":true,"type":"skeleton"}`,
+		},
+		{
+			name:       "empty provider left unchanged",
+			provider:   "",
+			wantOutput: "",
+		},
+		{
+			name:       "invalid provider JSON left unchanged",
+			provider:   "not-json{",
+			wantOutput: "not-json{",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := withDisconnectedFlag(tc.provider)
+			if got != tc.wantOutput {
+				t.Errorf("withDisconnectedFlag(%q) = %q, want %q", tc.provider, got, tc.wantOutput)
 			}
 		})
 	}

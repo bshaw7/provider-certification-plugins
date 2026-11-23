@@ -3,6 +3,7 @@ package plugin
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -263,26 +264,11 @@ func (p *Plugin) getSuiteName(id string) string {
 
 // LoadEnv load dynamic configuration from environment for plugin variation.
 func (p *Plugin) LoadEnv() error {
-	// OPCT-357: set the openshift-tests provider flag for platforms that
-	// require it, so tests configured to skip on that platform are ignored
-	// instead of scheduled as known failures.
-	envProviderConf := os.Getenv("TEST_PROVIDER")
-	if p.OTRunner != nil && len(envProviderConf) > 0 {
-		p.OTRunner.Provider = envProviderConf
-	}
-
 	// Set top level env vars from config
 	// TODO move env vars discovery to a separate function
 
-	// MIRROR_IMAGE_REPOSITORY is used in disconnected/mirrored environments
-	envMirror := os.Getenv("MIRROR_IMAGE_REPOSITORY")
-	if len(envMirror) > 0 {
-		if p.OTRunner != nil {
-			p.OTRunner.FromRepository = envMirror
-		}
-	}
-
-	// UPGRADE_RELEASES is used to upgrade the cluster
+	// RUN_MODE selects the workflow. Resolved first: the provider
+	// configuration depends on whether the disconnected workflow is active.
 	envRunMode := os.Getenv("RUN_MODE")
 	if len(envRunMode) > 0 {
 		switch envRunMode {
@@ -296,6 +282,43 @@ func (p *Plugin) LoadEnv() error {
 			p.ExecMode = ExecModeDefault
 		}
 	}
+
+	// OPCT-512: set the openshift-tests provider flag so tests configured to
+	// skip on the platform (OPCT-357) and on disconnected clusters
+	// (Disconnected:true) are ignored instead of scheduled as known failures.
+	//
+	// TEST_PROVIDER is the single source set by the opct CLI via the
+	// plugins-config ConfigMap, and already includes Disconnected:true when
+	// the disconnected workflow is selected. It is also consumed by
+	// openshift-tests itself as the default for --provider, which keeps the
+	// dry-run suite inventory consistent with the executed command.
+	//
+	// When TEST_PROVIDER is not set (older opct CLI without the ConfigMap
+	// key), fall back to detecting the platform from the cluster and merge
+	// the disconnected flag from the resolved workflow mode.
+	provider := os.Getenv("TEST_PROVIDER")
+	if len(provider) == 0 {
+		detected, err := p.getClusterProvider()
+		if err != nil {
+			log.Warnf("unable to detect the cluster platform, not setting the provider flag: %v", err)
+		}
+		provider = detected
+	}
+	if p.ExecMode == ExecModeDisconnected {
+		provider = withDisconnectedFlag(provider)
+	}
+	if p.OTRunner != nil && len(provider) > 0 {
+		p.OTRunner.Provider = provider
+	}
+
+	// MIRROR_IMAGE_REPOSITORY is used in disconnected/mirrored environments
+	envMirror := os.Getenv("MIRROR_IMAGE_REPOSITORY")
+	if len(envMirror) > 0 {
+		if p.OTRunner != nil {
+			p.OTRunner.FromRepository = envMirror
+		}
+	}
+
 	envUpgradeRelease := os.Getenv("UPGRADE_RELEASES")
 	if p.ExecMode == ExecModeUpgrade && len(envUpgradeRelease) > 0 {
 		if p.OTRunner != nil {
@@ -304,6 +327,35 @@ func (p *Plugin) LoadEnv() error {
 	}
 
 	return nil
+}
+
+// withDisconnectedFlag returns providerJSON with Disconnected set to true, so
+// openshift-tests excludes tests tagged [Skipped:Disconnected]. An empty
+// input means the platform is resolved by openshift-tests auto-discovery and
+// no provider type is known here; the flag cannot be expressed without a
+// type, so the input is returned unchanged with a warning.
+func withDisconnectedFlag(providerJSON string) string {
+	if len(providerJSON) == 0 {
+		log.Warn("disconnected workflow without a provider configuration: [Skipped:Disconnected] tests will not be filtered")
+		return providerJSON
+	}
+	cfg := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(providerJSON), &cfg); err != nil {
+		log.Warnf("unable to parse provider config %q, not setting the disconnected flag: %v", providerJSON, err)
+		return providerJSON
+	}
+	// Idempotent: a config that already carries the flag is returned as-is,
+	// preserving the exact string set by the CLI.
+	if disconnected, ok := cfg["Disconnected"].(bool); ok && disconnected {
+		return providerJSON
+	}
+	cfg["Disconnected"] = true
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		log.Warnf("unable to encode provider config with disconnected flag: %v", err)
+		return providerJSON
+	}
+	return string(out)
 }
 
 // Initialize resolve all dependencies before running the plugin.
@@ -651,6 +703,49 @@ func (p *Plugin) RunReportProgress() {
 			log.Infof(">> Preliminary summary: %s", p.Progress.GetTotalCountersString())
 		}
 	}()
+}
+
+// getClusterProvider returns the value for the openshift-tests --provider
+// flag when the cluster's infrastructure platform requires one. Platform
+// type External returns an explicit provider so tests configured to skip on
+// that platform are ignored instead of scheduled as known failures (OPCT-357).
+// Platform None returns the canonical skeleton provider, matching what
+// openshift-tests auto-discovery resolves to, so the disconnected workflow
+// can layer Disconnected:true on top of it (OPCT-512). On other platforms an
+// empty string is returned and openshift-tests auto-discovers the provider.
+func (p *Plugin) getClusterProvider() (string, error) {
+	restConfig, err := CreateKubeRestConfig()
+	if err != nil {
+		return "", fmt.Errorf("creating rest config: %w", err)
+	}
+	oc, err := occlient.NewForConfig(restConfig)
+	if err != nil {
+		return "", fmt.Errorf("creating config client: %w", err)
+	}
+	// Bound the detection so a hanging API server cannot block the plugin
+	// initialization; on timeout the provider flag is skipped with a warning.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	infra, err := oc.ConfigV1().Infrastructures().Get(ctx, "cluster", kmmetav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("reading infrastructure cluster: %w", err)
+	}
+	// Prefer status.platformStatus.type, falling back to spec.platformSpec.type
+	// (the field platform.sh uses) when status is not yet populated.
+	platform := ""
+	if infra.Status.PlatformStatus != nil {
+		platform = string(infra.Status.PlatformStatus.Type)
+	}
+	if platform == "" {
+		platform = string(infra.Spec.PlatformSpec.Type)
+	}
+	switch {
+	case strings.EqualFold(platform, "external"):
+		return `{"type":"external"}`, nil
+	case platform == "" || strings.EqualFold(platform, "none"):
+		return `{"type":"skeleton"}`, nil
+	}
+	return "", nil
 }
 
 // RunReportProgressUpgrade reports the upgrade progress to aggregator API.
