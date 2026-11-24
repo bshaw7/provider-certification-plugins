@@ -839,6 +839,68 @@ func TestLoadEnv(t *testing.T) {
 	}
 }
 
+func TestProviderJSONForPlatform(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		mode     string
+		want     string
+	}{
+		{
+			name:     "external regular keeps provider",
+			platform: "External",
+			mode:     ExecModeDefault,
+			want:     `{"type":"external"}`,
+		},
+		{
+			name:     "external disconnected merges flag",
+			platform: "External",
+			mode:     ExecModeDisconnected,
+			want:     `{"Disconnected":true,"type":"external"}`,
+		},
+		{
+			name:     "none resolves to skeleton",
+			platform: "None",
+			mode:     ExecModeDefault,
+			want:     `{"type":"skeleton"}`,
+		},
+		{
+			name:     "aws regular emits nothing",
+			platform: "AWS",
+			mode:     ExecModeDefault,
+			want:     "",
+		},
+		{
+			name:     "aws disconnected emits provider with flag",
+			platform: "AWS",
+			mode:     ExecModeDisconnected,
+			want:     `{"Disconnected":true,"type":"aws"}`,
+		},
+		{
+			name:     "gcp disconnected maps to gce",
+			platform: "GCP",
+			mode:     ExecModeDisconnected,
+			want:     `{"Disconnected":true,"type":"gce"}`,
+		},
+		{
+			name:     "baremetal disconnected maps to skeleton",
+			platform: "BareMetal",
+			mode:     ExecModeDisconnected,
+			want:     `{"Disconnected":true,"type":"skeleton"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := providerJSONForPlatform(tc.platform, tc.mode)
+			if got != tc.want {
+				t.Errorf("providerJSONForPlatform(%q, %q) = %q, want %q",
+					tc.platform, tc.mode, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWithDisconnectedFlag(t *testing.T) {
 	tests := []struct {
 		name       string
