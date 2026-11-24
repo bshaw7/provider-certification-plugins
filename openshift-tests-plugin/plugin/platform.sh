@@ -117,7 +117,9 @@ function setup_provider_external() {
     # The provider flag is set by the plugin on the run command (TEST_PROVIDER
     # env from the plugins-config ConfigMap, or cluster detection); this
     # keeps the platform-args metadata consistent with other providers.
-    export TEST_PROVIDER="${TEST_PROVIDER:-'{\"type\":\"external\"}'}"
+    if [ -z "${TEST_PROVIDER:-}" ]; then
+        export TEST_PROVIDER='{"type":"external"}'
+    fi
 
     OPENSHIFT_TESTS_EXTRA_ARGS+="--provider ${TEST_PROVIDER}"
 

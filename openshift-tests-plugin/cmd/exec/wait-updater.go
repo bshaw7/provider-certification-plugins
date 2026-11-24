@@ -73,6 +73,14 @@ func StartWaitUpdater(opts *OptionsWaitUpdate) error {
 	}
 	pl.BlockerPlugins = []*plugin.Plugin{blocker}
 
+	// LoadEnv resolves RUN_MODE into ExecMode before Initialize; the
+	// dependency waiter needs the workflow mode to decide whether the
+	// blocker plugin participates in the current workflow (e.g. the upgrade
+	// plugin is only active in the upgrade workflow).
+	if err = pl.LoadEnv(); err != nil {
+		return fmt.Errorf("unable to load environment for plugin %s: %w", opts.PluginName, err)
+	}
+
 	if err = pl.Initialize(); err != nil {
 		return fmt.Errorf("unable to initialize plugin %s: %w", opts.PluginName, err)
 	}

@@ -808,7 +808,9 @@ func TestLoadEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// t.Setenv restores the original values on cleanup. Empty string is
 			// treated as unset by LoadEnv, so clear every variable first.
-			for _, k := range []string{envProvider, envMirror, envRunMode, envUpgradeRel} {
+			// KUBECONFIG is cleared too so cluster detection in the fallback
+			// path cannot pick up the developer's ambient kubeconfig.
+			for _, k := range []string{envProvider, envMirror, envRunMode, envUpgradeRel, "KUBECONFIG"} {
 				t.Setenv(k, "")
 			}
 			for k, v := range tc.env {
