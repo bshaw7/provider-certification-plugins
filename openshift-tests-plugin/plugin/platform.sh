@@ -114,9 +114,10 @@ function setup_provider_external() {
 
     # openshift-tests args: tests configured to skip on platform type External
     # are ignored instead of scheduled as known failures. See OPCT-357.
-    # The provider flag is set by the plugin on the run command (TEST_PROVIDER
-    # env from the plugins-config ConfigMap, or cluster detection); this
-    # keeps the platform-args metadata consistent with other providers.
+    # The opct CLI resolves the provider and delivers it as TEST_PROVIDER via
+    # the plugins-config ConfigMap; the fallback below only covers a CLI that
+    # predates that key. Recording it here keeps the platform-args metadata
+    # consistent with the other providers.
     if [ -z "${TEST_PROVIDER:-}" ]; then
         export TEST_PROVIDER='{"type":"external"}'
     fi
