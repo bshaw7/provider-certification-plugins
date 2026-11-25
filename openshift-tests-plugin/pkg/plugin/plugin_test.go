@@ -713,15 +713,14 @@ func TestLoadEnv(t *testing.T) {
 			wantProv:   provExternalDVal,
 		},
 		{
-			// The CLI normally includes Disconnected in TEST_PROVIDER; when it
-			// does not, the plugin merges the flag from RUN_MODE. json.Marshal
-			// orders map keys alphabetically.
-			name:       "disconnected mode merges flag into provider config",
+			// The CLI owns the Disconnected flag; the plugin passes
+			// TEST_PROVIDER through verbatim and never derives it from RUN_MODE.
+			name:       "disconnected mode passes provider config through unchanged",
 			env:        map[string]string{envProvider: provExternalVal, envRunMode: ExecModeDisconnected},
 			withRunner: true,
 			execMode:   ExecModeDefault,
 			wantExec:   ExecModeDisconnected,
-			wantProv:   `{"Disconnected":true,"type":"external"}`,
+			wantProv:   provExternalVal,
 		},
 		{
 			name:       "TEST_PROVIDER without runner does not panic",
@@ -836,111 +835,6 @@ func TestLoadEnv(t *testing.T) {
 			}
 			if p.OTRunner.ToImage != tc.wantToImage {
 				t.Errorf("OTRunner.ToImage = %q, want %q", p.OTRunner.ToImage, tc.wantToImage)
-			}
-		})
-	}
-}
-
-func TestProviderJSONForPlatform(t *testing.T) {
-	tests := []struct {
-		name     string
-		platform string
-		mode     string
-		want     string
-	}{
-		{
-			name:     "external regular keeps provider",
-			platform: "External",
-			mode:     ExecModeDefault,
-			want:     `{"type":"external"}`,
-		},
-		{
-			name:     "external disconnected merges flag",
-			platform: "External",
-			mode:     ExecModeDisconnected,
-			want:     `{"Disconnected":true,"type":"external"}`,
-		},
-		{
-			name:     "none resolves to skeleton",
-			platform: "None",
-			mode:     ExecModeDefault,
-			want:     `{"type":"skeleton"}`,
-		},
-		{
-			name:     "aws regular emits nothing",
-			platform: "AWS",
-			mode:     ExecModeDefault,
-			want:     "",
-		},
-		{
-			name:     "aws disconnected emits provider with flag",
-			platform: "AWS",
-			mode:     ExecModeDisconnected,
-			want:     `{"Disconnected":true,"type":"aws"}`,
-		},
-		{
-			name:     "gcp disconnected maps to gce",
-			platform: "GCP",
-			mode:     ExecModeDisconnected,
-			want:     `{"Disconnected":true,"type":"gce"}`,
-		},
-		{
-			name:     "baremetal disconnected maps to skeleton",
-			platform: "BareMetal",
-			mode:     ExecModeDisconnected,
-			want:     `{"Disconnected":true,"type":"skeleton"}`,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := providerJSONForPlatform(tc.platform, tc.mode)
-			if got != tc.want {
-				t.Errorf("providerJSONForPlatform(%q, %q) = %q, want %q",
-					tc.platform, tc.mode, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestWithDisconnectedFlag(t *testing.T) {
-	tests := []struct {
-		name       string
-		provider   string
-		wantOutput string
-	}{
-		{
-			name:       "external provider gains disconnected flag",
-			provider:   `{"type":"external"}`,
-			wantOutput: `{"Disconnected":true,"type":"external"}`,
-		},
-		{
-			name:       "already disconnected config returned unchanged",
-			provider:   `{"type":"external","Disconnected":true}`,
-			wantOutput: `{"type":"external","Disconnected":true}`,
-		},
-		{
-			name:       "skeleton provider gains disconnected flag",
-			provider:   `{"type":"skeleton"}`,
-			wantOutput: `{"Disconnected":true,"type":"skeleton"}`,
-		},
-		{
-			name:       "empty provider left unchanged",
-			provider:   "",
-			wantOutput: "",
-		},
-		{
-			name:       "invalid provider JSON left unchanged",
-			provider:   "not-json{",
-			wantOutput: "not-json{",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := withDisconnectedFlag(tc.provider)
-			if got != tc.wantOutput {
-				t.Errorf("withDisconnectedFlag(%q) = %q, want %q", tc.provider, got, tc.wantOutput)
 			}
 		})
 	}
